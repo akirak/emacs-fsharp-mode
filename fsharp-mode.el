@@ -252,7 +252,7 @@ If set to t, the buffer will always be saved, silently."
   (let* ((fname    (file-name-nondirectory file))
          (dname    (file-name-directory file))
          (ext      (file-name-extension file))
-         (proj     (fsharp-mode/find-sln-or-fsproj file))
+         (proj     (expand-file-name (fsharp-mode-project-file (file-name-directory file))))
          (makefile (or (file-exists-p (concat dname "/Makefile"))
                        (file-exists-p (concat dname "/makefile")))))
     (cond
@@ -342,26 +342,38 @@ whole string."
 
 ;;; Project
 
-(defun fsharp-mode/find-sln-or-fsproj (dir-or-file)
-  "Search for a solution or F# project file in any enclosing
-folders relative to DIR-OR-FILE."
-  (fsharp-mode-search-upwards (rx (0+ nonl) (or ".fsproj" ".sln") eol)
-                              (file-name-directory dir-or-file)))
+(defconst fsharp-mode-project-file-regexp "\\(?:\\.\\(?:fsproj\\|sln\\)\\)\\'")
 
-(defun fsharp-mode-search-upwards (regex dir)
-  (when dir
-    (or (car-safe (directory-files dir 'full regex))
-        (fsharp-mode-search-upwards regex (fsharp-mode-parent-dir dir)))))
+(defvar fsharp-mode-project-root-cache
+  (make-hash-table :size 10 :test #'equal))
 
-(defun fsharp-mode-parent-dir (dir)
-  (let ((p (file-name-directory (directory-file-name dir))))
-    (unless (equal p dir)
-      p)))
+(defun fsharp-mode-clear-project-cache ()
+  "Clear the cache for project roots."
+  (interactive)
+  (clrhash fsharp-mode-project-root-cache))
+
+(defun fsharp-mode-project-root-p (dir)
+  (and (directory-files dir nil fsharp-mode-project-file-regexp)
+       t))
 
 ;; Make project.el aware of fsharp projects
 (defun fsharp-mode-project-root (dir)
-  (when-let (project-file (fsharp-mode/find-sln-or-fsproj dir))
-    (cons 'fsharp (file-name-directory project-file))))
+  (when (eq major-mode 'fsharp-mode)
+    (let* ((dir (file-name-as-directory (abbreviate-file-name (expand-file-name dir))))
+           (root (gethash dir fsharp-mode-project-root-cache)))
+      (if root
+          (cons 'fsharp root)
+        (setq root (locate-dominating-file dir #'fsharp-mode-project-root-p))
+        (when root
+          (puthash dir (abbreviate-file-name root) fsharp-mode-project-root-cache)
+          (cons 'fsharp (abbreviate-file-name root)))))))
+
+(defun fsharp-mode-project-file (dir)
+  "Find a project file in DIR."
+  (let ((root (project-root (project-current nil dir))))
+    (unless root
+      (user-error "Not inside a project"))
+    (car (directory-files root t fsharp-mode-project-file-regexp t))))
 
 (cl-defmethod project-roots ((project (head fsharp)))
   (list (cdr project)))
